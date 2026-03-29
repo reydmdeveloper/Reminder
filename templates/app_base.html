@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block body %}
+<button class="mobile-toggle"><i class="fa-solid fa-bars"></i></button>
+<div class="sidebar-overlay"></div>
+
+<div class="app-wrapper">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <h1>
+                <span class="brand-icon"><i class="fa-solid fa-bell"></i></span>
+                REY Datamind Reminder
+            </h1>
+            <small>Project Management</small>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="{{ url_for('dashboard') }}"
+               class="{% if request.endpoint == 'dashboard' %}active{% endif %}">
+                <span class="nav-icon"><i class="fa-solid fa-gauge-high"></i></span>
+                Dashboard
+            </a>
+
+            <a href="{{ url_for('add_reminder') }}"
+               class="{% if request.endpoint == 'add_reminder' %}active{% endif %}">
+                <span class="nav-icon"><i class="fa-solid fa-plus"></i></span>
+                New Reminder
+            </a>
+
+            {% if session.get('role') == 'admin' %}
+            <a href="{{ url_for('admin_users') }}"
+               class="{% if request.endpoint == 'admin_users' %}active{% endif %}">
+                <span class="nav-icon"><i class="fa-solid fa-users-gear"></i></span>
+                User Management
+                {% if pending_count is defined and pending_count > 0 %}
+                <span class="nav-badge">{{ pending_count }}</span>
+                {% endif %}
+            </a>
+            {% endif %}
+
+            <a href="{{ url_for('profile') }}"
+               class="{% if request.endpoint == 'profile' %}active{% endif %}">
+                <span class="nav-icon"><i class="fa-solid fa-user"></i></span>
+                Profile
+            </a>
+
+            <a href="{{ url_for('logout') }}">
+                <span class="nav-icon"><i class="fa-solid fa-right-from-bracket"></i></span>
+                Logout
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="sidebar-user">
+                <div class="user-avatar">
+                    {{ session.get('full_name', 'U')[0] | upper }}
+                </div>
+                <div class="user-info">
+                    <div class="user-name">{{ session.get('full_name', 'User') }}</div>
+                    <div class="user-role">{{ session.get('role', 'user') }}</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+</div>
+{% endblock %}

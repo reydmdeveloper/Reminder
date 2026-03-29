@@ -1,0 +1,122 @@
+{% extends "app_base.html" %}
+{% block title %}Dashboard – Project Reminder{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Dashboard</h2>
+    <p>Overview of your project reminders</p>
+</div>
+
+{% if session.get('role') == 'admin' %}
+<!-- Admin Stats -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon amber"><i class="fa-solid fa-bell"></i></div>
+        <div class="stat-info">
+            <div class="stat-value">{{ reminders | length }}</div>
+            <div class="stat-label">Total Reminders</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon blue"><i class="fa-solid fa-clock"></i></div>
+        <div class="stat-info">
+            <div class="stat-value">{{ upcoming_count }}</div>
+            <div class="stat-label">Upcoming</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon green"><i class="fa-solid fa-users"></i></div>
+        <div class="stat-info">
+            <div class="stat-value">{{ total_users }}</div>
+            <div class="stat-label">Total Users</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon red"><i class="fa-solid fa-user-clock"></i></div>
+        <div class="stat-info">
+            <div class="stat-value">{{ pending_count }}</div>
+            <div class="stat-label">Pending Approvals</div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Reminders Table -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fa-solid fa-list-check"></i>&nbsp; All Reminders</h3>
+        <a href="{{ url_for('add_reminder') }}" class="btn btn-primary btn-sm">
+            <i class="fa-solid fa-plus"></i> New
+        </a>
+    </div>
+
+    {% if reminders | length > 0 %}
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Project Name</th>
+                    <th>Date & Time</th>
+                    <th>Countdown</th>
+                    <th>Created By</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in reminders %}
+                <tr>
+                    <td class="text-muted">{{ loop.index }}</td>
+                    <td><strong>{{ r.project_name }}</strong></td>
+                    <td>{{ r.reminder_datetime.strftime('%b %d, %Y – %I:%M %p') }}</td>
+                    <td>
+                        {% if r.is_sent %}
+                            <span class="badge badge-muted">Sent</span>
+                        {% else %}
+                            <span class="countdown" data-countdown="{{ r.reminder_datetime.strftime('%Y-%m-%dT%H:%M:%S') }}" data-reminder-id="{{ r.id }}">—</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ r.creator_name }}</td>
+                    <td>
+                        {% if r.is_sent %}
+                            <span class="badge badge-success">Sent</span>
+                        {% else %}
+                            <span class="badge badge-info">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="btn-group">
+                            {% if not r.is_sent %}
+                            {% if session.get('role') == 'admin' or r.created_by == session.get('user_id') %}
+                            <a href="{{ url_for('edit_reminder', reminder_id=r.id) }}" class="btn btn-secondary btn-sm">
+                                <i class="fa-solid fa-pen"></i>
+                            </a>
+                            {% endif %}
+                            {% endif %}
+                            {% if session.get('role') == 'admin' or r.created_by == session.get('user_id') %}
+                            <form method="POST" action="{{ url_for('delete_reminder', reminder_id=r.id) }}" style="display:inline;">
+                                <button type="submit" class="btn btn-danger btn-sm" data-confirm="Delete this reminder?">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon"><i class="fa-solid fa-bell-slash"></i></div>
+        <h4>No Reminders Yet</h4>
+        <p>Create your first project reminder to get started.</p>
+        <a href="{{ url_for('add_reminder') }}" class="btn btn-primary btn-sm mt-4">
+            <i class="fa-solid fa-plus"></i> Create Reminder
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
