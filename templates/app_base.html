@@ -7,27 +7,76 @@
     <!-- Sidebar -->
     <aside class="sidebar">
         <div class="sidebar-brand">
-            <h1>
-                <span class="brand-icon"><i class="fa-solid fa-bell"></i></span>
-                REY Datamind Reminder
-            </h1>
-            <small>Project Management</small>
+            <div class="brand-logo-wrap">
+                <img src="{{ url_for('static', filename='Images/REYDM_LOGO.png') }}" alt="REYDM" class="brand-logo">
+            </div>
+            <small>REY Datamind Platform</small>
         </div>
 
         <nav class="sidebar-nav">
+            <!-- Dashboard always visible -->
             <a href="{{ url_for('dashboard') }}"
                class="{% if request.endpoint == 'dashboard' %}active{% endif %}">
                 <span class="nav-icon"><i class="fa-solid fa-gauge-high"></i></span>
                 Dashboard
             </a>
 
-            <a href="{{ url_for('add_reminder') }}"
-               class="{% if request.endpoint == 'add_reminder' %}active{% endif %}">
-                <span class="nav-icon"><i class="fa-solid fa-plus"></i></span>
-                New Reminder
-            </a>
+            {% if user_tools|length > 0 %}
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-section-label">Tools</div>
+            {% endif %}
+
+            <!-- Dynamic tool links – only show tools assigned to this user -->
+            {% for tool in user_tools %}
+                {% if tool.key == 'reminder' %}
+                <a href="{{ url_for('add_reminder') }}"
+                   class="{% if request.endpoint == 'add_reminder' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    New Reminder
+                </a>
+                {% elif tool.key == 'nightshift' %}
+                <a href="{{ url_for('nightshift') }}"
+                   class="{% if request.endpoint == 'nightshift' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Night Shift
+                </a>
+                {% elif tool.key == 'charpalette' %}
+                <a href="{{ url_for('charpalette') }}"
+                   class="{% if request.endpoint == 'charpalette' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Char Palette
+                </a>
+                {% elif tool.key == 'costconverter' %}
+                <a href="{{ url_for('costconverter') }}"
+                   class="{% if request.endpoint == 'costconverter' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Cost Converter
+                </a>
+                {% elif tool.key == 'projectanalysis' %}
+                <a href="{{ url_for('projectanalysis') }}"
+                   class="{% if request.endpoint == 'projectanalysis' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Project Analysis
+                </a>
+                {% elif tool.key == 'pdfunlocker' %}
+                <a href="{{ url_for('pdfunlocker') }}"
+                   class="{% if request.endpoint == 'pdfunlocker' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    PDF Unlocker
+                </a>
+                {% elif tool.key == 'attendance' %}
+                <a href="{{ url_for('attendance') }}"
+                   class="{% if request.endpoint == 'attendance' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Attendance
+                </a>
+                {% endif %}
+            {% endfor %}
 
             {% if session.get('role') == 'admin' %}
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-section-label">Admin</div>
+
             <a href="{{ url_for('admin_users') }}"
                class="{% if request.endpoint == 'admin_users' %}active{% endif %}">
                 <span class="nav-icon"><i class="fa-solid fa-users-gear"></i></span>
@@ -36,7 +85,15 @@
                 <span class="nav-badge">{{ pending_count }}</span>
                 {% endif %}
             </a>
+
+            <a href="{{ url_for('admin_attendance_requests') }}"
+               class="{% if request.endpoint == 'admin_attendance_requests' %}active{% endif %}">
+                <span class="nav-icon"><i class="fa-solid fa-clipboard-check"></i></span>
+                Attendance Requests
+            </a>
             {% endif %}
+
+            <div class="sidebar-divider"></div>
 
             <a href="{{ url_for('profile') }}"
                class="{% if request.endpoint == 'profile' %}active{% endif %}">

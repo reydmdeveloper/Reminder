@@ -1,9 +1,9 @@
 {% extends "auth_base.html" %}
-{% block title %}Verify OTP – Project Reminder{% endblock %}
+{% block title %}Verify OTP – REYDM{% endblock %}
 
 {% block auth_content %}
 <div class="auth-header">
-    <div class="auth-icon"><i class="fa-solid fa-shield-halved"></i></div>
+    <img src="{{ url_for('static', filename='Images/REYDM_LOGO.png') }}" alt="REYDM" class="auth-logo">
     <h2>Verify Your Email</h2>
     <p>Enter the 6-digit code sent to <strong>{{ email }}</strong></p>
 </div>
@@ -25,7 +25,7 @@
     </button>
 </form>
 
-<div class="auth-footer" style="margin-top: 16px;">
+<div class="auth-footer" style="margin-top: 14px;">
     <p class="text-muted text-sm">Didn't receive the code?</p>
     <button id="resend-otp-btn" class="btn btn-secondary btn-sm mt-2" type="button">
         Resend OTP

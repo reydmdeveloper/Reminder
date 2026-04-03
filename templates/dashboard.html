@@ -1,10 +1,10 @@
 {% extends "app_base.html" %}
-{% block title %}Dashboard – Project Reminder{% endblock %}
+{% block title %}Dashboard – REYDM{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <h2>Dashboard</h2>
-    <p>Overview of your project reminders</p>
+    <p>Welcome to REYDM – REY Datamind Platform</p>
 </div>
 
 {% if session.get('role') == 'admin' %}
@@ -41,6 +41,9 @@
 </div>
 {% endif %}
 
+{% set tools = get_user_tools() %}
+
+{% if 'reminder' in tools %}
 <!-- Reminders Table -->
 <div class="card">
     <div class="card-header">
@@ -119,4 +122,15 @@
     </div>
     {% endif %}
 </div>
+{% endif %}
+
+{% if tools | length == 0 and session.get('role') != 'admin' %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-icon"><i class="fa-solid fa-lock"></i></div>
+        <h4>No Tools Assigned</h4>
+        <p>Contact your administrator to get tools assigned to your account.</p>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

@@ -1,5 +1,5 @@
 {% extends "app_base.html" %}
-{% block title %}Profile – Project Reminder{% endblock %}
+{% block title %}Profile – REYDM{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -7,19 +7,19 @@
     <p>View your account details and change your password</p>
 </div>
 
-<div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 800px;">
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 800px;">
     <!-- Account Info -->
     <div class="card">
-        <h3 style="margin-bottom: 16px;"><i class="fa-solid fa-id-card"></i>&nbsp; Account Details</h3>
+        <h3 style="margin-bottom: 14px;"><i class="fa-solid fa-id-card"></i>&nbsp; Account Details</h3>
 
         <div class="form-group">
             <label>Full Name</label>
-            <div class="form-control" style="background:var(--bg-elevated);cursor:default;">{{ user.full_name }}</div>
+            <div class="form-control" style="background:var(--surface2);cursor:default;">{{ user.full_name }}</div>
         </div>
 
         <div class="form-group">
             <label>Email</label>
-            <div class="form-control" style="background:var(--bg-elevated);cursor:default;">{{ user.email }}</div>
+            <div class="form-control" style="background:var(--surface2);cursor:default;">{{ user.email }}</div>
         </div>
 
         <div class="form-group">
@@ -37,11 +37,28 @@
             <label>Joined</label>
             <div class="text-sm text-muted">{{ user.created_at.strftime('%B %d, %Y at %I:%M %p') }}</div>
         </div>
+
+        <div class="form-group">
+            <label>Assigned Tools</label>
+            <div>
+                {% if user.role == 'admin' %}
+                    <span class="text-sm text-muted">All tools (Admin)</span>
+                {% else %}
+                    {% for tool in user_tools %}
+                        <span class="badge badge-info" style="margin-right:4px;">
+                            <i class="{{ tool.icon }}"></i> {{ tool.name }}
+                        </span>
+                    {% else %}
+                        <span class="text-sm text-muted">No tools assigned</span>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
     </div>
 
     <!-- Change Password -->
     <div class="card">
-        <h3 style="margin-bottom: 16px;"><i class="fa-solid fa-lock"></i>&nbsp; Change Password</h3>
+        <h3 style="margin-bottom: 14px;"><i class="fa-solid fa-lock"></i>&nbsp; Change Password</h3>
 
         <form method="POST" action="{{ url_for('profile') }}">
             <div class="form-group">

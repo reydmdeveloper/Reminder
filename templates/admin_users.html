@@ -1,13 +1,13 @@
 {% extends "app_base.html" %}
-{% block title %}User Management – Project Reminder{% endblock %}
+{% block title %}User Management – REYDM{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <h2>User Management</h2>
-    <p>Manage registered users, approvals, roles, and passwords</p>
+    <p>Manage users, roles, tool access, and passwords</p>
 </div>
 
-<!-- Pending Approvals Section -->
+<!-- Pending Approvals -->
 {% set pending_users = users | selectattr('is_approved', 'equalto', 0) | list %}
 {% if pending_users | length > 0 %}
 <div class="card" style="border-color: var(--warning); border-left: 3px solid var(--warning);">
@@ -52,7 +52,7 @@
 </div>
 {% endif %}
 
-<!-- All Users Table -->
+<!-- All Users -->
 <div class="card">
     <div class="card-header">
         <h3><i class="fa-solid fa-users"></i>&nbsp; All Users ({{ users | length }})</h3>
@@ -65,9 +65,9 @@
                     <th>Name</th>
                     <th>Email</th>
                     <th>Role</th>
+                    <th>Assigned Tools</th>
                     <th>Mail</th>
                     <th>Status</th>
-                    <th>Joined</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -88,6 +88,25 @@
                         {% else %}
                             <span class="badge badge-info">User</span>
                         {% endif %}
+                    </td>
+                    <td>
+                        <!-- Tool On/Off Toggles for EVERY user -->
+                        <div class="tool-toggle-group">
+                            {% for tool_key, tool_info in all_tools.items() %}
+                                {% set has_tool = tool_key in u.allowed_tools %}
+                                <form method="POST" action="{{ url_for('toggle_tool', user_id=u.id, tool_key=tool_key) }}" style="display:inline;">
+                                    {% if has_tool %}
+                                    <button type="submit" class="btn btn-tool-on btn-sm" title="{{ tool_info.name }} — Click to Disable">
+                                        <i class="{{ tool_info.icon }}"></i> {{ tool_info.name }} <span class="tool-status-label on">On</span>
+                                    </button>
+                                    {% else %}
+                                    <button type="submit" class="btn btn-tool-off btn-sm" title="{{ tool_info.name }} — Click to Enable">
+                                        <i class="{{ tool_info.icon }}"></i> {{ tool_info.name }} <span class="tool-status-label off">Off</span>
+                                    </button>
+                                    {% endif %}
+                                </form>
+                            {% endfor %}
+                        </div>
                     </td>
                     <td>
                         {% if u.mail_enabled %}
@@ -113,7 +132,6 @@
                             <span class="status-dot inactive"></span><span class="text-sm">Inactive</span>
                         {% endif %}
                     </td>
-                    <td class="text-muted text-sm">{{ u.created_at.strftime('%b %d, %Y') }}</td>
                     <td>
                         {% if u.id != session.get('user_id') %}
                         <div class="btn-group">

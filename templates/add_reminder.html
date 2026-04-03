@@ -1,5 +1,5 @@
 {% extends "app_base.html" %}
-{% block title %}Add Reminder – Project Reminder{% endblock %}
+{% block title %}Add Reminder – REYDM{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -44,7 +44,6 @@
 
 {% block scripts %}
 <script>
-    // Set min date to today
     const dateInput = document.getElementById('reminder_date');
     if (dateInput) {
         const today = new Date().toISOString().split('T')[0];
