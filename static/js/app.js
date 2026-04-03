@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════
-   PROJECT REMINDER – JavaScript
+   REYDM – Main JavaScript
    ═══════════════════════════════════════════════════════════════════ */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -50,14 +50,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            // Handle paste
             input.addEventListener('paste', (e) => {
                 e.preventDefault();
                 const pasted = e.clipboardData.getData('text').trim();
                 if (/^\d{6}$/.test(pasted)) {
-                    otpInputs.forEach((inp, i) => {
-                        inp.value = pasted[i] || '';
-                    });
+                    otpInputs.forEach((inp, i) => { inp.value = pasted[i] || ''; });
                     otpInputs[5].focus();
                     updateHiddenOtp();
                 }
@@ -75,14 +72,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const resendBtn = document.getElementById('resend-otp-btn');
     if (resendBtn) {
         let cooldown = 0;
-
         resendBtn.addEventListener('click', async () => {
             if (cooldown > 0) return;
-
             try {
                 const res = await fetch('/resend-otp', { method: 'POST' });
                 const data = await res.json();
-
                 if (data.success) {
                     cooldown = 60;
                     resendBtn.disabled = true;
@@ -96,15 +90,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }, 1000);
                 }
-            } catch (err) {
-                console.error('Resend OTP error:', err);
-            }
+            } catch (err) { console.error('Resend OTP error:', err); }
         });
     }
 
     // ─── Countdown timers for reminders ──────────────────────────
     const triggeredReminders = new Set();
-
     document.querySelectorAll('[data-countdown]').forEach(el => {
         const target = new Date(el.dataset.countdown).getTime();
         const reminderId = el.dataset.reminderId;
@@ -116,8 +107,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (diff <= 0) {
                 el.textContent = 'Due now';
                 el.style.color = 'var(--danger)';
-
-                // Trigger email send once when countdown reaches zero
                 if (reminderId && !triggeredReminders.has(reminderId)) {
                     triggeredReminders.add(reminderId);
                     triggerReminderEmail(reminderId, el);
@@ -135,15 +124,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (hours > 0) parts.push(`${hours}h`);
             parts.push(`${mins}m`);
             parts.push(`${secs}s`);
-
             el.textContent = parts.join(' ');
         }
-
         update();
         setInterval(update, 1000);
     });
 
-    // ─── Trigger reminder email when countdown hits zero ─────────
     async function triggerReminderEmail(reminderId, el) {
         try {
             const res = await fetch(`/reminders/trigger/${reminderId}`, {
@@ -151,30 +137,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' }
             });
             const data = await res.json();
-
             if (data.success) {
                 el.innerHTML = '<span class="badge badge-success" style="font-size:11px;">✓ Emails Sent</span>';
-
-                // Update the status column in the same row
                 const row = el.closest('tr');
                 if (row) {
                     const statusCell = row.querySelector('td:nth-child(6)');
-                    if (statusCell) {
-                        statusCell.innerHTML = '<span class="badge badge-success">Sent</span>';
-                    }
+                    if (statusCell) statusCell.innerHTML = '<span class="badge badge-success">Sent</span>';
                 }
             }
-        } catch (err) {
-            console.error('Trigger reminder error:', err);
-        }
+        } catch (err) { console.error('Trigger error:', err); }
     }
 
     // ─── Confirm delete ──────────────────────────────────────────
     document.querySelectorAll('[data-confirm]').forEach(el => {
         el.addEventListener('click', (e) => {
-            if (!confirm(el.dataset.confirm)) {
-                e.preventDefault();
-            }
+            if (!confirm(el.dataset.confirm)) e.preventDefault();
         });
     });
 
