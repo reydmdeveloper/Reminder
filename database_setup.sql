@@ -1,12 +1,13 @@
 -- ═══════════════════════════════════════════════════════════════
--- PROJECT REMINDER – Database Setup Script
--- Run this if you want to manually create the database & tables
+-- REYDM – Database Setup Script
+-- The app.py init_db() function handles all this automatically.
+-- This SQL file is provided for reference or manual setup.
 -- ═══════════════════════════════════════════════════════════════
 
-CREATE DATABASE IF NOT EXISTS `project_reminder_db`;
-USE `project_reminder_db`;
+CREATE DATABASE IF NOT EXISTS `reydm_db`;
+USE `reydm_db`;
 
--- Users table
+-- Users table (with allowed_tools JSON column)
 CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     full_name VARCHAR(100) NOT NULL,
@@ -15,11 +16,13 @@ CREATE TABLE IF NOT EXISTS users (
     role ENUM('admin', 'user') DEFAULT 'user',
     is_approved TINYINT(1) DEFAULT 0,
     is_active TINYINT(1) DEFAULT 1,
+    mail_enabled TINYINT(1) DEFAULT 1,
+    allowed_tools JSON DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- OTP tokens for email verification
+-- OTP tokens
 CREATE TABLE IF NOT EXISTS otp_tokens (
     id INT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(150) NOT NULL,
@@ -30,7 +33,7 @@ CREATE TABLE IF NOT EXISTS otp_tokens (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Reminders table
+-- Reminders
 CREATE TABLE IF NOT EXISTS reminders (
     id INT AUTO_INCREMENT PRIMARY KEY,
     project_name VARCHAR(255) NOT NULL,
@@ -53,12 +56,21 @@ CREATE TABLE IF NOT EXISTS reminder_logs (
     FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE CASCADE
 );
 
--- Default admin user (password: admin123)
--- The password hash below is for 'admin123' — change it after first login!
-INSERT INTO users (full_name, email, password_hash, role, is_approved)
-VALUES ('Administrator', 'admin@system.local',
-        'scrypt:32768:8:1$placeholder$hash', 'admin', 1)
-ON DUPLICATE KEY UPDATE id=id;
+-- Night shift employees
+CREATE TABLE IF NOT EXISTS ns_employees (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_id VARCHAR(20) UNIQUE NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    dept VARCHAR(60) DEFAULT '',
+    status ENUM('active', 'resigned') DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
--- NOTE: The app.py init_db() function handles all this automatically.
--- This SQL file is provided for reference or manual setup only.
+-- Night shift attendance
+CREATE TABLE IF NOT EXISTS ns_attendance (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    emp_id VARCHAR(20) NOT NULL,
+    att_date DATE NOT NULL,
+    present TINYINT(1) DEFAULT 1,
+    UNIQUE KEY unique_emp_date (emp_id, att_date)
+);
