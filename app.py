@@ -11,20 +11,28 @@ import random
 import string
 import threading
 import time
+import uuid
+import re as re_module
 from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    session, flash, jsonify
+    session, flash, jsonify, send_from_directory
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 import mysql.connector
 
 # ─── App Configuration ───────────────────────────────────────────────
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-to-a-random-secret-key")
 app.permanent_session_lifetime = timedelta(hours=2)
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 * 1024  # 5GB max upload
+
+# ─── Upload Configuration ────────────────────────────────────────────
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'chat_files')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ─── Database Configuration ──────────────────────────────────────────
 DB_CONFIG = {
@@ -75,6 +83,11 @@ AVAILABLE_TOOLS = {
         "name": "Attendance",
         "icon": "fa-solid fa-clock",
         "description": "Login/Logout time tracker with reports",
+    },
+    "chat": {
+        "name": "Chat",
+        "icon": "fa-solid fa-comments",
+        "description": "Team chat with file sharing via OneDrive",
     },
 }
 
@@ -223,6 +236,108 @@ def init_db():
             )
         """)
 
+
+        # ─── CHAT TABLES ─────────────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_conversations (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                conv_type ENUM('private', 'group') DEFAULT 'private',
+                group_name VARCHAR(150) DEFAULT NULL,
+                group_description VARCHAR(500) DEFAULT NULL,
+                created_by INT DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Chat message reactions
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_reactions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                message_id INT NOT NULL,
+                user_id INT NOT NULL,
+                emoji VARCHAR(10) NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE KEY unique_msg_user_emoji (message_id, user_id, emoji)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_participants (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                conversation_id INT NOT NULL,
+                user_id INT NOT NULL,
+                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE KEY unique_conv_user (conversation_id, user_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                conversation_id INT NOT NULL,
+                sender_id INT NOT NULL,
+                message_text TEXT DEFAULT NULL,
+                message_type ENUM('text', 'file', 'image', 'system') DEFAULT 'text',
+                file_name VARCHAR(500) DEFAULT NULL,
+                file_url VARCHAR(2000) DEFAULT NULL,
+                file_size VARCHAR(50) DEFAULT NULL,
+                is_deleted TINYINT(1) DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_read_receipts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                conversation_id INT NOT NULL,
+                user_id INT NOT NULL,
+                last_read_message_id INT DEFAULT 0,
+                read_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE KEY unique_conv_user_read (conversation_id, user_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_pinned_messages (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                conversation_id INT NOT NULL,
+                message_id INT NOT NULL,
+                pinned_by INT NOT NULL,
+                pin_duration ENUM('1h', '24h', '7d', '30d', 'forever') DEFAULT 'forever',
+                expires_at DATETIME DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+                FOREIGN KEY (pinned_by) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE KEY unique_conv_msg_pin (conversation_id, message_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_deleted_for_me (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                message_id INT NOT NULL,
+                user_id INT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE KEY unique_msg_user_del (message_id, user_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                setting_key VARCHAR(100) UNIQUE NOT NULL,
+                setting_value TEXT DEFAULT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
+
         # Insert default admin if not exists
         cursor.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1")
         if not cursor.fetchone():
@@ -251,6 +366,11 @@ def init_db():
                 "INSERT INTO ns_employees (emp_id, name, dept, status) VALUES (%s, %s, %s, %s)",
                 defaults,
             )
+
+        # Insert default OneDrive folder link setting
+        cursor.execute("SELECT id FROM admin_settings WHERE setting_key = 'onedrive_folder_link' LIMIT 1")
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO admin_settings (setting_key, setting_value) VALUES (%s, %s)", ("onedrive_folder_link", ""))
 
         conn.commit()
         cursor.close()
@@ -367,6 +487,26 @@ def send_reminder_email(to_email, project_name, reminder_time):
     return send_email(to_email, subject, body)
 
 
+
+
+def send_chat_notification_email(to_email, sender_name, message_preview):
+    subject = f"REYDM Chat: New message from {sender_name}"
+    body = f"""<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:30px;border:1px solid #e0e0e0;border-radius:12px;">
+        <h2 style="color:#1f6feb;text-align:center;">New Chat Message</h2>
+        <div style="background:#f0f6ff;padding:20px;border-radius:8px;margin:16px 0;">
+        <p style="margin:0 0 8px;color:#888;font-size:13px;">From: <strong>{sender_name}</strong></p>
+        <p style="margin:0;color:#333;">{message_preview[:200]}</p></div></div>"""
+    return send_email(to_email, subject, body)
+
+def send_mention_email(to_email, sender_name, conv_name, message_preview):
+    subject = f"REYDM: {sender_name} mentioned you"
+    body = f"""<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:30px;border:1px solid #e0e0e0;border-radius:12px;">
+        <h2 style="color:#d29922;text-align:center;">You were mentioned!</h2>
+        <div style="background:#fef9ee;padding:20px;border-radius:8px;margin:16px 0;">
+        <p style="margin:0 0 8px;color:#888;font-size:13px;"><strong>{sender_name}</strong> mentioned you in <strong>{conv_name}</strong></p>
+        <p style="margin:0;color:#333;">{message_preview[:200]}</p></div></div>"""
+    return send_email(to_email, subject, body)
+
 # ═══════════════════════════════════════════════════════════════════════
 # AUTH DECORATORS & HELPERS
 # ═══════════════════════════════════════════════════════════════════════
@@ -415,6 +555,16 @@ def get_user_tools():
     """Return list of tool keys the current user can access (from allowed_tools)."""
     return session.get("allowed_tools", [])
 
+
+
+def get_admin_setting(key, default=""):
+    conn = get_db()
+    if not conn: return default
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT setting_value FROM admin_settings WHERE setting_key = %s", (key,))
+    row = cursor.fetchone()
+    cursor.close(); conn.close()
+    return row["setting_value"] if row and row["setting_value"] else default
 
 @app.context_processor
 def inject_tools():
@@ -1743,6 +1893,453 @@ def reminder_scheduler():
             print(f"Scheduler error: {e}")
 
         time.sleep(30)
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ROUTES – CHAT
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/chat")
+@login_required
+@tool_required("chat")
+def chat():
+    onedrive_link = get_admin_setting("onedrive_folder_link", "")
+    return render_template("chat.html", onedrive_link=onedrive_link)
+
+@app.route("/uploads/chat_files/<filename>")
+@login_required
+def serve_chat_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+@app.route("/api/chat/contacts")
+@login_required
+@tool_required("chat")
+def api_chat_contacts():
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, full_name, email FROM users WHERE is_approved = 1 AND is_active = 1 AND id != %s ORDER BY full_name ASC", (session["user_id"],))
+    contacts = cursor.fetchall(); cursor.close(); conn.close()
+    return jsonify(contacts)
+
+@app.route("/api/chat/conversations")
+@login_required
+@tool_required("chat")
+def api_chat_conversations():
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT cc.id AS conversation_id, cc.conv_type, cc.group_name, cc.updated_at,
+            (SELECT cm.message_text FROM chat_messages cm WHERE cm.conversation_id = cc.id AND cm.is_deleted = 0 ORDER BY cm.created_at DESC LIMIT 1) AS last_message,
+            (SELECT cm.message_type FROM chat_messages cm WHERE cm.conversation_id = cc.id AND cm.is_deleted = 0 ORDER BY cm.created_at DESC LIMIT 1) AS last_message_type,
+            (SELECT cm.file_name FROM chat_messages cm WHERE cm.conversation_id = cc.id AND cm.is_deleted = 0 ORDER BY cm.created_at DESC LIMIT 1) AS last_file_name,
+            (SELECT cm.created_at FROM chat_messages cm WHERE cm.conversation_id = cc.id AND cm.is_deleted = 0 ORDER BY cm.created_at DESC LIMIT 1) AS last_message_time,
+            (SELECT u2.full_name FROM chat_messages cm JOIN users u2 ON cm.sender_id = u2.id WHERE cm.conversation_id = cc.id AND cm.is_deleted = 0 ORDER BY cm.created_at DESC LIMIT 1) AS last_sender_name,
+            COALESCE((SELECT COUNT(*) FROM chat_messages cm2 WHERE cm2.conversation_id = cc.id AND cm2.is_deleted = 0 AND cm2.id > COALESCE((SELECT crr.last_read_message_id FROM chat_read_receipts crr WHERE crr.conversation_id = cc.id AND crr.user_id = %s), 0) AND cm2.sender_id != %s), 0) AS unread_count
+        FROM chat_conversations cc JOIN chat_participants cp ON cc.id = cp.conversation_id WHERE cp.user_id = %s
+        ORDER BY COALESCE((SELECT cm.created_at FROM chat_messages cm WHERE cm.conversation_id = cc.id AND cm.is_deleted = 0 ORDER BY cm.created_at DESC LIMIT 1), cc.created_at) DESC
+    """, (session["user_id"], session["user_id"], session["user_id"]))
+    conversations = cursor.fetchall()
+    result = []
+    for conv in conversations:
+        c = dict(conv)
+        if c["conv_type"] == "private":
+            cursor.execute("SELECT u.id, u.full_name, u.email FROM chat_participants cp JOIN users u ON cp.user_id = u.id WHERE cp.conversation_id = %s AND cp.user_id != %s LIMIT 1", (c["conversation_id"], session["user_id"]))
+            ou = cursor.fetchone()
+            c["other_user_id"] = ou["id"] if ou else None
+            c["other_user_name"] = ou["full_name"] if ou else "Unknown"
+            c["other_user_email"] = ou["email"] if ou else ""
+        else:
+            cursor.execute("SELECT u.id, u.full_name FROM chat_participants cp JOIN users u ON cp.user_id = u.id WHERE cp.conversation_id = %s", (c["conversation_id"],))
+            c["participants"] = cursor.fetchall()
+        if c.get("last_message_time"): c["last_message_time"] = c["last_message_time"].strftime("%Y-%m-%d %H:%M:%S")
+        if c.get("updated_at"): c["updated_at"] = c["updated_at"].strftime("%Y-%m-%d %H:%M:%S")
+        result.append(c)
+    cursor.close(); conn.close()
+    return jsonify(result)
+
+@app.route("/api/chat/conversations", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_create_conversation():
+    data = request.get_json(); conv_type = data.get("conv_type", "private"); participants = data.get("participants", []); group_name = data.get("group_name", "")
+    if not participants: return jsonify({"success": False}), 400
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    if conv_type == "private" and len(participants) == 1:
+        cursor.execute("SELECT cc.id FROM chat_conversations cc JOIN chat_participants cp1 ON cc.id = cp1.conversation_id AND cp1.user_id = %s JOIN chat_participants cp2 ON cc.id = cp2.conversation_id AND cp2.user_id = %s WHERE cc.conv_type = 'private' LIMIT 1", (session["user_id"], participants[0]))
+        existing = cursor.fetchone()
+        if existing: cursor.close(); conn.close(); return jsonify({"success": True, "conversation_id": existing["id"], "existing": True})
+    cursor.execute("INSERT INTO chat_conversations (conv_type, group_name, created_by) VALUES (%s, %s, %s)", (conv_type, group_name if conv_type == "group" else None, session["user_id"]))
+    conv_id = cursor.lastrowid
+    cursor.execute("INSERT INTO chat_participants (conversation_id, user_id) VALUES (%s, %s)", (conv_id, session["user_id"]))
+    for uid in participants:
+        try: cursor.execute("INSERT INTO chat_participants (conversation_id, user_id) VALUES (%s, %s)", (conv_id, uid))
+        except mysql.connector.IntegrityError: pass
+    conn.commit(); cursor.close(); conn.close()
+    return jsonify({"success": True, "conversation_id": conv_id, "existing": False})
+
+def _serialize_msg(m, uid):
+    return {"id": m["id"], "sender_id": m["sender_id"], "sender_name": m["sender_name"], "sender_email": m["sender_email"], "message_text": m["message_text"], "message_type": m["message_type"], "file_name": m["file_name"], "file_url": m["file_url"], "file_size": m["file_size"], "created_at": m["created_at"].strftime("%Y-%m-%d %H:%M:%S"), "is_mine": m["sender_id"] == uid, "is_pinned": bool(m.get("pin_id")), "pin_id": m.get("pin_id"), "reactions": {}}
+
+@app.route("/api/chat/messages/<int:cid>")
+@login_required
+@tool_required("chat")
+def api_chat_messages(cid):
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify([])
+    limit = min(int(request.args.get("limit", 50)), 100); before_id = request.args.get("before_id")
+    q = "SELECT cm.*, u.full_name AS sender_name, u.email AS sender_email, cpm.id AS pin_id FROM chat_messages cm JOIN users u ON cm.sender_id = u.id LEFT JOIN chat_pinned_messages cpm ON cpm.message_id = cm.id AND cpm.conversation_id = cm.conversation_id AND (cpm.expires_at IS NULL OR cpm.expires_at > NOW()) LEFT JOIN chat_deleted_for_me cdfm ON cdfm.message_id = cm.id AND cdfm.user_id = %s WHERE cm.conversation_id = %s AND cm.is_deleted = 0 AND cdfm.id IS NULL"
+    params = [session["user_id"], cid]
+    if before_id: q += " AND cm.id < %s"; params.append(int(before_id))
+    q += " ORDER BY cm.created_at DESC LIMIT %s"; params.append(limit)
+    cursor.execute(q, tuple(params)); messages = cursor.fetchall()
+    if messages:
+        lid = max(m["id"] for m in messages)
+        cursor.execute("INSERT INTO chat_read_receipts (conversation_id, user_id, last_read_message_id) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE last_read_message_id = GREATEST(last_read_message_id, %s)", (cid, session["user_id"], lid, lid))
+        conn.commit()
+    result = [_serialize_msg(m, session["user_id"]) for m in reversed(messages)]
+    # Batch load reactions
+    if result:
+        msg_ids = [r["id"] for r in result]
+        fmt = ','.join(['%s'] * len(msg_ids))
+        cursor.execute(f"SELECT cr.message_id, cr.emoji, cr.user_id, u.full_name FROM chat_reactions cr JOIN users u ON cr.user_id = u.id WHERE cr.message_id IN ({fmt})", tuple(msg_ids))
+        for rx in cursor.fetchall():
+            for r in result:
+                if r["id"] == rx["message_id"]:
+                    r["reactions"].setdefault(rx["emoji"], []).append({"user_id": rx["user_id"], "name": rx["full_name"]})
+    cursor.close(); conn.close()
+    return jsonify(result)
+
+@app.route("/api/chat/messages/<int:cid>", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_send_message(cid):
+    data = request.get_json(); msg_text = data.get("message_text", "").strip(); msg_type = data.get("message_type", "text")
+    file_name = data.get("file_name"); file_url = data.get("file_url"); file_size = data.get("file_size")
+    if not msg_text and msg_type == "text": return jsonify({"success": False}), 400
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
+    cursor.execute("INSERT INTO chat_messages (conversation_id, sender_id, message_text, message_type, file_name, file_url, file_size) VALUES (%s, %s, %s, %s, %s, %s, %s)", (cid, session["user_id"], msg_text, msg_type, file_name, file_url, file_size))
+    mid = cursor.lastrowid
+    cursor.execute("UPDATE chat_conversations SET updated_at = NOW() WHERE id = %s", (cid,))
+    cursor.execute("INSERT INTO chat_read_receipts (conversation_id, user_id, last_read_message_id) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE last_read_message_id = GREATEST(last_read_message_id, %s)", (cid, session["user_id"], mid, mid))
+    conn.commit()
+    cursor.execute("SELECT u.email, u.full_name, u.mail_enabled, u.id FROM chat_participants cp JOIN users u ON cp.user_id = u.id WHERE cp.conversation_id = %s AND cp.user_id != %s AND u.mail_enabled = 1", (cid, session["user_id"]))
+    recipients = cursor.fetchall(); sender_name = session.get("full_name", "Someone")
+    preview = msg_text if msg_type == "text" else f"Shared a file: {file_name}"
+    mentioned_names = re_module.findall(r'@([\w][\w ]*?)(?:\s|$|,|\.)', msg_text or '')
+    cursor.execute("SELECT conv_type, group_name FROM chat_conversations WHERE id = %s", (cid,))
+    ci = cursor.fetchone(); conv_name = ci["group_name"] if ci and ci["conv_type"] == "group" else "Private Chat"
+    for r in recipients:
+        is_mentioned = any(r["full_name"].lower().startswith(mn.lower().strip()) for mn in mentioned_names)
+        if is_mentioned:
+            threading.Thread(target=send_mention_email, args=(r["email"], sender_name, conv_name, preview)).start()
+        else:
+            threading.Thread(target=send_chat_notification_email, args=(r["email"], sender_name, preview)).start()
+    cursor.execute("SELECT cm.*, u.full_name AS sender_name, u.email AS sender_email, NULL AS pin_id FROM chat_messages cm JOIN users u ON cm.sender_id = u.id WHERE cm.id = %s", (mid,))
+    new_msg = cursor.fetchone(); cursor.close(); conn.close()
+    return jsonify({"success": True, "message": _serialize_msg(new_msg, session["user_id"])})
+
+@app.route("/api/chat/messages/<int:cid>/delete/<int:mid>", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_delete_message(cid, mid):
+    data = request.get_json() or {}; delete_for = data.get("delete_for", "me")
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM chat_messages WHERE id = %s AND conversation_id = %s", (mid, cid))
+    msg = cursor.fetchone()
+    if not msg: cursor.close(); conn.close(); return jsonify({"success": False}), 404
+    if delete_for == "everyone":
+        if msg["sender_id"] != session["user_id"] and session.get("role") != "admin":
+            cursor.close(); conn.close(); return jsonify({"success": False, "message": "Only sender/admin can delete for everyone."}), 403
+        cursor.execute("UPDATE chat_messages SET is_deleted = 1 WHERE id = %s", (mid,))
+        cursor.execute("DELETE FROM chat_pinned_messages WHERE message_id = %s", (mid,))
+    else:
+        try: cursor.execute("INSERT INTO chat_deleted_for_me (message_id, user_id) VALUES (%s, %s)", (mid, session["user_id"]))
+        except mysql.connector.IntegrityError: pass
+    conn.commit(); cursor.close(); conn.close()
+    return jsonify({"success": True})
+
+@app.route("/api/chat/messages/<int:cid>/new")
+@login_required
+@tool_required("chat")
+def api_chat_new_messages(cid):
+    after_id = int(request.args.get("after_id", 0))
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify([])
+    cursor.execute("SELECT cm.*, u.full_name AS sender_name, u.email AS sender_email, cpm.id AS pin_id FROM chat_messages cm JOIN users u ON cm.sender_id = u.id LEFT JOIN chat_pinned_messages cpm ON cpm.message_id = cm.id AND cpm.conversation_id = cm.conversation_id AND (cpm.expires_at IS NULL OR cpm.expires_at > NOW()) LEFT JOIN chat_deleted_for_me cdfm ON cdfm.message_id = cm.id AND cdfm.user_id = %s WHERE cm.conversation_id = %s AND cm.is_deleted = 0 AND cdfm.id IS NULL AND cm.id > %s ORDER BY cm.created_at ASC", (session["user_id"], cid, after_id))
+    messages = cursor.fetchall()
+    if messages:
+        lid = max(m["id"] for m in messages)
+        cursor.execute("INSERT INTO chat_read_receipts (conversation_id, user_id, last_read_message_id) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE last_read_message_id = GREATEST(last_read_message_id, %s)", (cid, session["user_id"], lid, lid))
+        conn.commit()
+    result = [_serialize_msg(m, session["user_id"]) for m in messages]
+    cursor.close(); conn.close()
+    return jsonify(result)
+
+@app.route("/api/chat/unread-total")
+@login_required
+def api_chat_unread_total():
+    conn = get_db()
+    if not conn: return jsonify({"unread": 0})
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT COALESCE(SUM(unread), 0) AS total_unread FROM (SELECT (SELECT COUNT(*) FROM chat_messages cm2 WHERE cm2.conversation_id = cc.id AND cm2.is_deleted = 0 AND cm2.id > COALESCE((SELECT crr.last_read_message_id FROM chat_read_receipts crr WHERE crr.conversation_id = cc.id AND crr.user_id = %s), 0) AND cm2.sender_id != %s) AS unread FROM chat_conversations cc JOIN chat_participants cp ON cc.id = cp.conversation_id WHERE cp.user_id = %s) sub", (session["user_id"], session["user_id"], session["user_id"]))
+    row = cursor.fetchone(); cursor.close(); conn.close()
+    return jsonify({"unread": row["total_unread"] if row else 0})
+
+@app.route("/api/chat/group/create", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_create_group():
+    data = request.get_json(); group_name = data.get("group_name", "").strip(); participants = data.get("participants", [])
+    if not group_name: return jsonify({"success": False, "message": "Group name required."}), 400
+    if len(participants) < 1: return jsonify({"success": False}), 400
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("INSERT INTO chat_conversations (conv_type, group_name, created_by) VALUES ('group', %s, %s)", (group_name, session["user_id"]))
+    conv_id = cursor.lastrowid
+    cursor.execute("INSERT INTO chat_participants (conversation_id, user_id) VALUES (%s, %s)", (conv_id, session["user_id"]))
+    for uid in participants:
+        try: cursor.execute("INSERT INTO chat_participants (conversation_id, user_id) VALUES (%s, %s)", (conv_id, uid))
+        except mysql.connector.IntegrityError: pass
+    cursor.execute("INSERT INTO chat_messages (conversation_id, sender_id, message_text, message_type) VALUES (%s, %s, %s, 'system')", (conv_id, session["user_id"], f"{session['full_name']} created the group '{group_name}'"))
+    conn.commit(); cursor.close(); conn.close()
+    return jsonify({"success": True, "conversation_id": conv_id})
+
+@app.route("/api/chat/upload", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_upload_file():
+    if 'file' not in request.files: return jsonify({"success": False, "message": "No file."}), 400
+    f = request.files['file']
+    if not f.filename: return jsonify({"success": False}), 400
+    original_name = secure_filename(f.filename)
+    unique_name = f"{uuid.uuid4().hex[:12]}_{original_name}"
+    filepath = os.path.join(UPLOAD_FOLDER, unique_name)
+    # Stream save in chunks for large files
+    chunk_size = 8 * 1024 * 1024  # 8MB chunks
+    total = 0
+    with open(filepath, 'wb') as out:
+        while True:
+            chunk = f.stream.read(chunk_size)
+            if not chunk:
+                break
+            out.write(chunk)
+            total += len(chunk)
+    if total < 1024:
+        size_str = f"{total} B"
+    elif total < 1024 * 1024:
+        size_str = f"{total/1024:.1f} KB"
+    elif total < 1024 * 1024 * 1024:
+        size_str = f"{total/(1024*1024):.1f} MB"
+    else:
+        size_str = f"{total/(1024*1024*1024):.2f} GB"
+    return jsonify({"success": True, "file_name": original_name, "file_url": url_for('serve_chat_file', filename=unique_name, _external=False), "file_size": size_str})
+
+@app.route("/api/chat/messages/<int:cid>/pin/<int:mid>", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_pin_message(cid, mid):
+    data = request.get_json() or {}; duration = data.get("duration", "forever")
+    expires_at = None
+    if duration == "1h": expires_at = datetime.now() + timedelta(hours=1)
+    elif duration == "24h": expires_at = datetime.now() + timedelta(hours=24)
+    elif duration == "7d": expires_at = datetime.now() + timedelta(days=7)
+    elif duration == "30d": expires_at = datetime.now() + timedelta(days=30)
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
+    try:
+        cursor.execute("INSERT INTO chat_pinned_messages (conversation_id, message_id, pinned_by, pin_duration, expires_at) VALUES (%s, %s, %s, %s, %s)", (cid, mid, session["user_id"], duration, expires_at))
+    except mysql.connector.IntegrityError:
+        cursor.execute("UPDATE chat_pinned_messages SET pinned_by = %s, pin_duration = %s, expires_at = %s WHERE conversation_id = %s AND message_id = %s", (session["user_id"], duration, expires_at, cid, mid))
+    conn.commit(); cursor.close(); conn.close()
+    return jsonify({"success": True})
+
+@app.route("/api/chat/messages/<int:cid>/unpin/<int:mid>", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_unpin_message(cid, mid):
+    conn = get_db(); cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_pinned_messages WHERE conversation_id = %s AND message_id = %s", (cid, mid))
+    conn.commit(); cursor.close(); conn.close()
+    return jsonify({"success": True})
+
+@app.route("/api/chat/messages/<int:cid>/pinned")
+@login_required
+@tool_required("chat")
+def api_chat_pinned_messages(cid):
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT cm.id, cm.message_text, cm.message_type, cm.file_name, cm.created_at, u.full_name AS sender_name, cpm.pin_duration, cpm.expires_at, cpm.id AS pin_id, pu.full_name AS pinned_by_name FROM chat_pinned_messages cpm JOIN chat_messages cm ON cpm.message_id = cm.id JOIN users u ON cm.sender_id = u.id JOIN users pu ON cpm.pinned_by = pu.id WHERE cpm.conversation_id = %s AND cm.is_deleted = 0 AND (cpm.expires_at IS NULL OR cpm.expires_at > NOW()) ORDER BY cpm.created_at DESC", (cid,))
+    pins = cursor.fetchall(); cursor.close(); conn.close()
+    return jsonify([{"message_id": p["id"], "message_text": p["message_text"], "message_type": p["message_type"], "file_name": p["file_name"], "sender_name": p["sender_name"], "pin_duration": p["pin_duration"], "pinned_by_name": p["pinned_by_name"], "pin_id": p["pin_id"], "created_at": p["created_at"].strftime("%Y-%m-%d %H:%M:%S"), "expires_at": p["expires_at"].strftime("%Y-%m-%d %H:%M:%S") if p["expires_at"] else None} for p in pins])
+
+@app.route("/api/chat/onedrive-link")
+@login_required
+@tool_required("chat")
+def api_chat_onedrive_link():
+    return jsonify({"link": get_admin_setting("onedrive_folder_link", "")})
+
+
+
+# ─── MESSAGE REACTIONS ────────────────────────────────────────────
+@app.route("/api/chat/messages/<int:cid>/react/<int:mid>", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_react(cid, mid):
+    data = request.get_json() or {}
+    emoji = data.get("emoji", "")
+    if not emoji: return jsonify({"success": False}), 400
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO chat_reactions (message_id, user_id, emoji) VALUES (%s, %s, %s)", (mid, session["user_id"], emoji))
+    except mysql.connector.IntegrityError:
+        cursor.execute("DELETE FROM chat_reactions WHERE message_id = %s AND user_id = %s AND emoji = %s", (mid, session["user_id"], emoji))
+    conn.commit(); cursor.close(); conn.close()
+    return jsonify({"success": True})
+
+@app.route("/api/chat/messages/<int:cid>/reactions/<int:mid>")
+@login_required
+@tool_required("chat")
+def api_chat_get_reactions(cid, mid):
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT cr.emoji, cr.user_id, u.full_name FROM chat_reactions cr JOIN users u ON cr.user_id = u.id WHERE cr.message_id = %s ORDER BY cr.created_at ASC", (mid,))
+    rows = cursor.fetchall(); cursor.close(); conn.close()
+    grouped = {}
+    for r in rows:
+        grouped.setdefault(r["emoji"], []).append({"user_id": r["user_id"], "name": r["full_name"]})
+    return jsonify(grouped)
+
+# ─── GROUP MANAGEMENT ─────────────────────────────────────────────
+@app.route("/api/chat/group/<int:cid>/info")
+@login_required
+@tool_required("chat")
+def api_chat_group_info(cid):
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
+    cursor.execute("SELECT * FROM chat_conversations WHERE id = %s", (cid,))
+    conv = cursor.fetchone()
+    cursor.execute("SELECT u.id, u.full_name, u.email FROM chat_participants cp JOIN users u ON cp.user_id = u.id WHERE cp.conversation_id = %s ORDER BY u.full_name", (cid,))
+    members = cursor.fetchall()
+    cursor.execute("SELECT COUNT(*) AS cnt FROM chat_messages WHERE conversation_id = %s AND is_deleted = 0", (cid,))
+    msg_count = cursor.fetchone()["cnt"]
+    cursor.close(); conn.close()
+    return jsonify({
+        "success": True, "conv_type": conv["conv_type"], "group_name": conv.get("group_name"),
+        "group_description": conv.get("group_description", ""),
+        "created_by": conv["created_by"], "members": members, "message_count": msg_count,
+        "created_at": conv["created_at"].strftime("%Y-%m-%d %H:%M:%S") if conv.get("created_at") else None,
+    })
+
+@app.route("/api/chat/group/<int:cid>/update", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_group_update(cid):
+    data = request.get_json() or {}
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
+    updates = []
+    params = []
+    if "group_name" in data and data["group_name"].strip():
+        updates.append("group_name = %s"); params.append(data["group_name"].strip())
+    if "group_description" in data:
+        updates.append("group_description = %s"); params.append(data["group_description"].strip())
+    if updates:
+        params.append(cid)
+        cursor.execute(f"UPDATE chat_conversations SET {', '.join(updates)} WHERE id = %s", tuple(params))
+        if "group_name" in data:
+            cursor.execute("INSERT INTO chat_messages (conversation_id, sender_id, message_text, message_type) VALUES (%s, %s, %s, 'system')", (cid, session["user_id"], f"{session['full_name']} renamed the group to '{data['group_name'].strip()}'"))
+        conn.commit()
+    cursor.close(); conn.close()
+    return jsonify({"success": True})
+
+@app.route("/api/chat/group/<int:cid>/add-member", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_group_add_member(cid):
+    data = request.get_json() or {}
+    user_id = data.get("user_id")
+    if not user_id: return jsonify({"success": False}), 400
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
+    try:
+        cursor.execute("INSERT INTO chat_participants (conversation_id, user_id) VALUES (%s, %s)", (cid, user_id))
+        cursor.execute("SELECT full_name FROM users WHERE id = %s", (user_id,))
+        added_user = cursor.fetchone()
+        name = added_user["full_name"] if added_user else "Someone"
+        cursor.execute("INSERT INTO chat_messages (conversation_id, sender_id, message_text, message_type) VALUES (%s, %s, %s, 'system')", (cid, session["user_id"], f"{session['full_name']} added {name} to the group"))
+        conn.commit()
+    except mysql.connector.IntegrityError:
+        cursor.close(); conn.close()
+        return jsonify({"success": False, "message": "Already a member."})
+    cursor.close(); conn.close()
+    return jsonify({"success": True})
+
+@app.route("/api/chat/group/<int:cid>/remove-member", methods=["POST"])
+@login_required
+@tool_required("chat")
+def api_chat_group_remove_member(cid):
+    data = request.get_json() or {}
+    user_id = data.get("user_id")
+    if not user_id: return jsonify({"success": False}), 400
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT created_by FROM chat_conversations WHERE id = %s", (cid,))
+    conv = cursor.fetchone()
+    if not conv: cursor.close(); conn.close(); return jsonify({"success": False}), 404
+    if conv["created_by"] != session["user_id"] and session.get("role") != "admin" and user_id != session["user_id"]:
+        cursor.close(); conn.close()
+        return jsonify({"success": False, "message": "Only group creator or admin can remove members."}), 403
+    cursor.execute("SELECT full_name FROM users WHERE id = %s", (user_id,))
+    removed_user = cursor.fetchone()
+    name = removed_user["full_name"] if removed_user else "Someone"
+    cursor.execute("DELETE FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, user_id))
+    action = "left the group" if user_id == session["user_id"] else f"removed {name} from the group"
+    cursor.execute("INSERT INTO chat_messages (conversation_id, sender_id, message_text, message_type) VALUES (%s, %s, %s, 'system')", (cid, session["user_id"], f"{session['full_name']} {action}"))
+    conn.commit(); cursor.close(); conn.close()
+    return jsonify({"success": True})
+
+# ─── SEARCH MESSAGES ─────────────────────────────────────────────
+@app.route("/api/chat/messages/<int:cid>/search")
+@login_required
+@tool_required("chat")
+def api_chat_search_messages(cid):
+    q = request.args.get("q", "").strip()
+    if not q or len(q) < 2: return jsonify([])
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
+    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify([])
+    cursor.execute("SELECT cm.id, cm.message_text, cm.message_type, cm.file_name, cm.created_at, u.full_name AS sender_name FROM chat_messages cm JOIN users u ON cm.sender_id = u.id WHERE cm.conversation_id = %s AND cm.is_deleted = 0 AND (cm.message_text LIKE %s OR cm.file_name LIKE %s) ORDER BY cm.created_at DESC LIMIT 30", (cid, f"%{q}%", f"%{q}%"))
+    results = cursor.fetchall(); cursor.close(); conn.close()
+    return jsonify([{"id": r["id"], "message_text": r["message_text"], "message_type": r["message_type"], "file_name": r["file_name"], "sender_name": r["sender_name"], "created_at": r["created_at"].strftime("%Y-%m-%d %H:%M:%S")} for r in results])
+
+# ─── FILE DOWNLOAD WITH HEADERS ──────────────────────────────────
+@app.route("/api/chat/download/<filename>")
+@login_required
+def api_chat_download_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ROUTES – ADMIN SETTINGS
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/settings")
+@admin_required
+def admin_settings():
+    return render_template("admin_settings.html", onedrive_link=get_admin_setting("onedrive_folder_link", ""))
+
+@app.route("/admin/settings/update", methods=["POST"])
+@admin_required
+def update_admin_settings():
+    onedrive_link = request.form.get("onedrive_folder_link", "").strip()
+    conn = get_db(); cursor = conn.cursor()
+    cursor.execute("INSERT INTO admin_settings (setting_key, setting_value) VALUES ('onedrive_folder_link', %s) ON DUPLICATE KEY UPDATE setting_value = %s", (onedrive_link, onedrive_link))
+    conn.commit(); cursor.close(); conn.close()
+    flash("Settings updated.", "success"); return redirect(url_for("admin_settings"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
