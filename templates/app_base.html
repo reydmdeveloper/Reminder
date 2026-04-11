@@ -70,6 +70,13 @@
                     <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
                     Attendance
                 </a>
+                {% elif tool.key == 'chat' %}
+                <a href="{{ url_for('chat') }}"
+                   class="{% if request.endpoint == 'chat' %}active{% endif %}" id="chatNavLink">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Chat
+                    <span class="nav-badge" id="chatUnreadBadge" style="display:none;">0</span>
+                </a>
                 {% endif %}
             {% endfor %}
 
@@ -90,6 +97,12 @@
                class="{% if request.endpoint == 'admin_attendance_requests' %}active{% endif %}">
                 <span class="nav-icon"><i class="fa-solid fa-clipboard-check"></i></span>
                 Attendance Requests
+            </a>
+
+            <a href="{{ url_for('admin_settings') }}"
+               class="{% if request.endpoint == 'admin_settings' %}active{% endif %}">
+                <span class="nav-icon"><i class="fa-solid fa-gear"></i></span>
+                Settings
             </a>
             {% endif %}
 
@@ -125,4 +138,28 @@
         {% block content %}{% endblock %}
     </main>
 </div>
+
+<!-- Chat unread badge updater -->
+<script>
+(function() {
+    const badge = document.getElementById('chatUnreadBadge');
+    if (!badge) return;
+
+    async function updateUnread() {
+        try {
+            const res = await fetch('/api/chat/unread-total');
+            const data = await res.json();
+            if (data.unread > 0) {
+                badge.textContent = data.unread > 99 ? '99+' : data.unread;
+                badge.style.display = 'inline-block';
+            } else {
+                badge.style.display = 'none';
+            }
+        } catch (e) {}
+    }
+
+    updateUnread();
+    setInterval(updateUnread, 10000);
+})();
+</script>
 {% endblock %}

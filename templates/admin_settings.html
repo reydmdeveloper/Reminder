@@ -1,0 +1,79 @@
+{% extends "app_base.html" %}
+{% block title %}Settings – REYDM{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Admin Settings</h2>
+    <p>Configure platform-wide settings</p>
+</div>
+
+<!-- OneDrive Configuration -->
+<div class="card" style="border-left: 3px solid #0078d4;">
+    <div class="card-header">
+        <h3><i class="fa-brands fa-microsoft" style="color:#0078d4;"></i>&nbsp; OneDrive File Storage</h3>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+        Set the Microsoft OneDrive shared folder link for the Chat file sharing feature.
+        Users will use this link to upload and download files directly from the chat.
+    </p>
+    <form method="POST" action="{{ url_for('update_admin_settings') }}">
+        <div class="form-group">
+            <label>OneDrive Shared Folder Link</label>
+            <input type="url" name="onedrive_folder_link" class="form-control"
+                   value="{{ onedrive_link }}"
+                   placeholder="https://onedrive.live.com/..."
+                   style="font-family:var(--mono);font-size:12px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="fa-solid fa-save"></i> Save Settings
+            </button>
+            {% if onedrive_link %}
+            <a href="{{ onedrive_link }}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">
+                <i class="fa-solid fa-arrow-up-right-from-square"></i> Test Link
+            </a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<!-- Instructions Card -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fa-solid fa-circle-info" style="color:var(--info);"></i>&nbsp; Setup Instructions</h3>
+    </div>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+        <p style="margin-bottom:12px;"><strong>How to set up OneDrive file sharing for Chat:</strong></p>
+        <div style="padding-left:8px;">
+            <p><span style="color:var(--accent2);font-weight:700;font-family:var(--mono);">1.</span>
+                Go to <a href="https://onedrive.live.com" target="_blank" rel="noopener">OneDrive</a> and create a shared folder for your team.</p>
+            <p><span style="color:var(--accent2);font-weight:700;font-family:var(--mono);">2.</span>
+                Right-click the folder → <strong>Share</strong> → Set permissions to "Anyone with the link can edit".</p>
+            <p><span style="color:var(--accent2);font-weight:700;font-family:var(--mono);">3.</span>
+                Copy the share link and paste it in the field above.</p>
+            <p><span style="color:var(--accent2);font-weight:700;font-family:var(--mono);">4.</span>
+                Users in Chat can open this folder to upload files, then share the file's direct link in chat messages.</p>
+        </div>
+        <p style="margin-top:16px;padding:10px 14px;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--border);">
+            <i class="fa-solid fa-lightbulb" style="color:var(--warning);"></i>&nbsp;
+            <strong>Tip:</strong> For fastest downloads, users should share the direct download link of individual files from OneDrive.
+        </p>
+    </div>
+</div>
+
+<!-- Gmail / User Database Info -->
+<div class="card">
+    <div class="card-header">
+        <h3><i class="fa-solid fa-envelope" style="color:var(--danger);"></i>&nbsp; Gmail & Chat Contacts</h3>
+    </div>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+        <p>Chat contacts are populated from the <strong>registered users database</strong>. All approved and active users appear as contacts in the Chat tool.</p>
+        <p style="margin-top:8px;">Chat notifications are sent via <strong>Gmail SMTP</strong> to users who have email notifications enabled.</p>
+        <div style="margin-top:12px;padding:10px 14px;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--border);">
+            <p style="margin:0;"><i class="fa-solid fa-envelope-open-text" style="color:var(--accent2);"></i>&nbsp;
+            <strong>Current SMTP:</strong>
+            <span style="font-family:var(--mono);font-size:12px;">{{ config.get('GMAIL_USER', 'Not configured') if config else 'reydmdeveloper@gmail.com' }}</span></p>
+        </div>
+    </div>
+</div>
+{% endblock %}
