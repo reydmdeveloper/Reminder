@@ -28,7 +28,7 @@ import mysql.connector
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-to-a-random-secret-key")
 app.permanent_session_lifetime = timedelta(hours=2)
-app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 * 1024  # 5GB max upload
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 * 1024  # 50MB max upload
 
 # ─── Upload Configuration ────────────────────────────────────────────
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'chat_files')
@@ -285,12 +285,19 @@ def init_db():
                 file_name VARCHAR(500) DEFAULT NULL,
                 file_url VARCHAR(2000) DEFAULT NULL,
                 file_size VARCHAR(50) DEFAULT NULL,
+                reply_to_id INT DEFAULT NULL,
                 is_deleted TINYINT(1) DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE,
                 FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
+
+        # Add reply_to_id column if not exists
+        try:
+            cursor.execute("ALTER TABLE chat_messages ADD COLUMN reply_to_id INT DEFAULT NULL")
+        except Exception:
+            pass
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_read_receipts (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -642,6 +649,12 @@ def login():
         else:
             session["allowed_tools"] = []
 
+        # Set online status
+        conn2 = get_db()
+        if conn2:
+            c2 = conn2.cursor()
+            c2.execute("UPDATE users SET last_active = NOW() WHERE id = %s", (user["id"],))
+            conn2.commit(); c2.close(); conn2.close()
         flash(f"Welcome back, {user['full_name']}!", "success")
         return redirect(url_for("dashboard"))
 
@@ -1911,6 +1924,9 @@ def chat():
 @app.route("/uploads/chat_files/<filename>")
 @login_required
 def serve_chat_file(filename):
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(filepath):
+        return render_template_string('<div style="font-family:sans-serif;text-align:center;padding:80px 20px;background:#0d1117;color:#e6edf3;min-height:100vh;"><div style="max-width:400px;margin:auto;"><div style="font-size:72px;opacity:0.3;margin-bottom:20px;">📁</div><h1 style="font-size:28px;color:#f85149;margin-bottom:10px;">File Not Found</h1><p style="color:#8b949e;font-size:14px;margin-bottom:24px;">This file may have been moved to OneDrive.</p><a href="{{ onedrive }}" target="_blank" style="display:inline-block;padding:10px 24px;background:#0078d4;color:white;border-radius:8px;text-decoration:none;font-weight:600;">Open OneDrive Folder</a><br><a href="/chat" style="display:inline-block;margin-top:16px;color:#388bfd;font-size:13px;">← Back to Chat</a></div></div>', onedrive=get_admin_setting('onedrive_folder_link', '#')), 404
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route("/api/chat/contacts")
@@ -1978,7 +1994,7 @@ def api_chat_create_conversation():
     return jsonify({"success": True, "conversation_id": conv_id, "existing": False})
 
 def _serialize_msg(m, uid):
-    return {"id": m["id"], "sender_id": m["sender_id"], "sender_name": m["sender_name"], "sender_email": m["sender_email"], "message_text": m["message_text"], "message_type": m["message_type"], "file_name": m["file_name"], "file_url": m["file_url"], "file_size": m["file_size"], "created_at": m["created_at"].strftime("%Y-%m-%d %H:%M:%S"), "is_mine": m["sender_id"] == uid, "is_pinned": bool(m.get("pin_id")), "pin_id": m.get("pin_id"), "reactions": {}}
+    return {"id": m["id"], "sender_id": m["sender_id"], "sender_name": m["sender_name"], "sender_email": m["sender_email"], "message_text": m["message_text"], "message_type": m["message_type"], "file_name": m["file_name"], "file_url": m["file_url"], "file_size": m["file_size"], "created_at": m["created_at"].strftime("%Y-%m-%d %H:%M:%S"), "is_mine": m["sender_id"] == uid, "is_pinned": bool(m.get("pin_id")), "pin_id": m.get("pin_id"), "reactions": {}, "reply_to_id": m.get("reply_to_id"), "reply_sender": m.get("reply_sender"), "reply_text": m.get("reply_text")}
 
 @app.route("/api/chat/messages/<int:cid>")
 @login_required
@@ -1988,7 +2004,7 @@ def api_chat_messages(cid):
     cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
     if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify([])
     limit = min(int(request.args.get("limit", 50)), 100); before_id = request.args.get("before_id")
-    q = "SELECT cm.*, u.full_name AS sender_name, u.email AS sender_email, cpm.id AS pin_id FROM chat_messages cm JOIN users u ON cm.sender_id = u.id LEFT JOIN chat_pinned_messages cpm ON cpm.message_id = cm.id AND cpm.conversation_id = cm.conversation_id AND (cpm.expires_at IS NULL OR cpm.expires_at > NOW()) LEFT JOIN chat_deleted_for_me cdfm ON cdfm.message_id = cm.id AND cdfm.user_id = %s WHERE cm.conversation_id = %s AND cm.is_deleted = 0 AND cdfm.id IS NULL"
+    q = "SELECT cm.*, u.full_name AS sender_name, u.email AS sender_email, cpm.id AS pin_id, ru.full_name AS reply_sender, rm.message_text AS reply_text FROM chat_messages cm JOIN users u ON cm.sender_id = u.id LEFT JOIN chat_pinned_messages cpm ON cpm.message_id = cm.id AND cpm.conversation_id = cm.conversation_id AND (cpm.expires_at IS NULL OR cpm.expires_at > NOW()) LEFT JOIN chat_deleted_for_me cdfm ON cdfm.message_id = cm.id AND cdfm.user_id = %s LEFT JOIN chat_messages rm ON cm.reply_to_id = rm.id LEFT JOIN users ru ON rm.sender_id = ru.id WHERE cm.conversation_id = %s AND cm.is_deleted = 0 AND cdfm.id IS NULL"
     params = [session["user_id"], cid]
     if before_id: q += " AND cm.id < %s"; params.append(int(before_id))
     q += " ORDER BY cm.created_at DESC LIMIT %s"; params.append(limit)
@@ -2016,11 +2032,12 @@ def api_chat_messages(cid):
 def api_chat_send_message(cid):
     data = request.get_json(); msg_text = data.get("message_text", "").strip(); msg_type = data.get("message_type", "text")
     file_name = data.get("file_name"); file_url = data.get("file_url"); file_size = data.get("file_size")
+    reply_to_id = data.get("reply_to_id")
     if not msg_text and msg_type == "text": return jsonify({"success": False}), 400
     conn = get_db(); cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
     if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
-    cursor.execute("INSERT INTO chat_messages (conversation_id, sender_id, message_text, message_type, file_name, file_url, file_size) VALUES (%s, %s, %s, %s, %s, %s, %s)", (cid, session["user_id"], msg_text, msg_type, file_name, file_url, file_size))
+    cursor.execute("INSERT INTO chat_messages (conversation_id, sender_id, message_text, message_type, file_name, file_url, file_size, reply_to_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (cid, session["user_id"], msg_text, msg_type, file_name, file_url, file_size, reply_to_id))
     mid = cursor.lastrowid
     cursor.execute("UPDATE chat_conversations SET updated_at = NOW() WHERE id = %s", (cid,))
     cursor.execute("INSERT INTO chat_read_receipts (conversation_id, user_id, last_read_message_id) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE last_read_message_id = GREATEST(last_read_message_id, %s)", (cid, session["user_id"], mid, mid))
@@ -2053,7 +2070,7 @@ def api_chat_delete_message(cid, mid):
     if delete_for == "everyone":
         if msg["sender_id"] != session["user_id"] and session.get("role") != "admin":
             cursor.close(); conn.close(); return jsonify({"success": False, "message": "Only sender/admin can delete for everyone."}), 403
-        cursor.execute("UPDATE chat_messages SET is_deleted = 1 WHERE id = %s", (mid,))
+        cursor.execute("UPDATE chat_messages SET is_deleted = 1, message_text = %s, message_type = 'system', file_name = NULL, file_url = NULL WHERE id = %s", ("🚫 This message was deleted", mid))
         cursor.execute("DELETE FROM chat_pinned_messages WHERE message_id = %s", (mid,))
     else:
         try: cursor.execute("INSERT INTO chat_deleted_for_me (message_id, user_id) VALUES (%s, %s)", (mid, session["user_id"]))
@@ -2069,7 +2086,7 @@ def api_chat_new_messages(cid):
     conn = get_db(); cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
     if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify([])
-    cursor.execute("SELECT cm.*, u.full_name AS sender_name, u.email AS sender_email, cpm.id AS pin_id FROM chat_messages cm JOIN users u ON cm.sender_id = u.id LEFT JOIN chat_pinned_messages cpm ON cpm.message_id = cm.id AND cpm.conversation_id = cm.conversation_id AND (cpm.expires_at IS NULL OR cpm.expires_at > NOW()) LEFT JOIN chat_deleted_for_me cdfm ON cdfm.message_id = cm.id AND cdfm.user_id = %s WHERE cm.conversation_id = %s AND cm.is_deleted = 0 AND cdfm.id IS NULL AND cm.id > %s ORDER BY cm.created_at ASC", (session["user_id"], cid, after_id))
+    cursor.execute("SELECT cm.*, u.full_name AS sender_name, u.email AS sender_email, cpm.id AS pin_id, ru.full_name AS reply_sender, rm.message_text AS reply_text FROM chat_messages cm JOIN users u ON cm.sender_id = u.id LEFT JOIN chat_pinned_messages cpm ON cpm.message_id = cm.id AND cpm.conversation_id = cm.conversation_id AND (cpm.expires_at IS NULL OR cpm.expires_at > NOW()) LEFT JOIN chat_deleted_for_me cdfm ON cdfm.message_id = cm.id AND cdfm.user_id = %s LEFT JOIN chat_messages rm ON cm.reply_to_id = rm.id LEFT JOIN users ru ON rm.sender_id = ru.id WHERE cm.conversation_id = %s AND cm.is_deleted = 0 AND cdfm.id IS NULL AND cm.id > %s ORDER BY cm.created_at ASC", (session["user_id"], cid, after_id))
     messages = cursor.fetchall()
     if messages:
         lid = max(m["id"] for m in messages)
@@ -2117,25 +2134,39 @@ def api_chat_upload_file():
     original_name = secure_filename(f.filename)
     unique_name = f"{uuid.uuid4().hex[:12]}_{original_name}"
     filepath = os.path.join(UPLOAD_FOLDER, unique_name)
-    # Stream save in chunks for large files
-    chunk_size = 8 * 1024 * 1024  # 8MB chunks
+    chunk_size = 8 * 1024 * 1024
     total = 0
     with open(filepath, 'wb') as out:
         while True:
             chunk = f.stream.read(chunk_size)
-            if not chunk:
-                break
+            if not chunk: break
             out.write(chunk)
             total += len(chunk)
-    if total < 1024:
-        size_str = f"{total} B"
-    elif total < 1024 * 1024:
-        size_str = f"{total/1024:.1f} KB"
-    elif total < 1024 * 1024 * 1024:
-        size_str = f"{total/(1024*1024):.1f} MB"
-    else:
-        size_str = f"{total/(1024*1024*1024):.2f} GB"
-    return jsonify({"success": True, "file_name": original_name, "file_url": url_for('serve_chat_file', filename=unique_name, _external=False), "file_size": size_str})
+    if total < 1024: size_str = f"{total} B"
+    elif total < 1024*1024: size_str = f"{total/1024:.1f} KB"
+    elif total < 1024*1024*1024: size_str = f"{total/(1024*1024):.1f} MB"
+    else: size_str = f"{total/(1024*1024*1024):.2f} GB"
+    # Extract page count for supported file types
+    page_count = 0
+    ext = original_name.rsplit('.', 1)[-1].lower() if '.' in original_name else ''
+    try:
+        if ext == 'pdf':
+            import subprocess
+            result = subprocess.run(['python3', '-c', f"import fitz; doc=fitz.open('{filepath}'); print(len(doc))"], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0: page_count = int(result.stdout.strip())
+            else:
+                # Fallback: count PDF pages by reading file
+                with open(filepath, 'rb') as pf:
+                    content = pf.read()
+                    page_count = content.count(b'/Type /Page') - content.count(b'/Type /Pages')
+                    if page_count <= 0: page_count = content.count(b'/Type/Page') - content.count(b'/Type/Pages')
+                    if page_count <= 0: page_count = 0
+    except Exception: pass
+    local_url = url_for('serve_chat_file', filename=unique_name, _external=False)
+    onedrive_link = get_admin_setting("onedrive_folder_link", "")
+    return jsonify({"success": True, "file_name": original_name, "file_url": local_url,
+                    "local_url": local_url, "file_size": size_str,
+                    "page_count": page_count, "file_ext": ext})
 
 @app.route("/api/chat/messages/<int:cid>/pin/<int:mid>", methods=["POST"])
 @login_required
@@ -2239,8 +2270,12 @@ def api_chat_group_info(cid):
 def api_chat_group_update(cid):
     data = request.get_json() or {}
     conn = get_db(); cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
-    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
+    cursor.execute("SELECT created_by FROM chat_conversations WHERE id = %s", (cid,))
+    conv = cursor.fetchone()
+    if not conv: cursor.close(); conn.close(); return jsonify({"success": False}), 404
+    if conv["created_by"] != session["user_id"] and session.get("role") != "admin":
+        cursor.close(); conn.close()
+        return jsonify({"success": False, "message": "Only group admin can edit."}), 403
     updates = []
     params = []
     if "group_name" in data and data["group_name"].strip():
@@ -2264,8 +2299,12 @@ def api_chat_group_add_member(cid):
     user_id = data.get("user_id")
     if not user_id: return jsonify({"success": False}), 400
     conn = get_db(); cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT id FROM chat_participants WHERE conversation_id = %s AND user_id = %s", (cid, session["user_id"]))
-    if not cursor.fetchone(): cursor.close(); conn.close(); return jsonify({"success": False}), 403
+    cursor.execute("SELECT created_by FROM chat_conversations WHERE id = %s", (cid,))
+    conv = cursor.fetchone()
+    if not conv: cursor.close(); conn.close(); return jsonify({"success": False}), 404
+    if conv["created_by"] != session["user_id"] and session.get("role") != "admin":
+        cursor.close(); conn.close()
+        return jsonify({"success": False, "message": "Only group admin can add members."}), 403
     try:
         cursor.execute("INSERT INTO chat_participants (conversation_id, user_id) VALUES (%s, %s)", (cid, user_id))
         cursor.execute("SELECT full_name FROM users WHERE id = %s", (user_id,))
@@ -2320,7 +2359,41 @@ def api_chat_search_messages(cid):
 @app.route("/api/chat/download/<filename>")
 @login_required
 def api_chat_download_file(filename):
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(filepath):
+        return render_template_string('<div style="font-family:sans-serif;text-align:center;padding:80px 20px;background:#0d1117;color:#e6edf3;min-height:100vh;"><div style="max-width:400px;margin:auto;"><div style="font-size:72px;opacity:0.3;margin-bottom:20px;">📁</div><h1 style="font-size:28px;color:#f85149;margin-bottom:10px;">File Not Found</h1><p style="color:#8b949e;font-size:14px;margin-bottom:24px;">This file has been moved to OneDrive or is no longer available on the server.</p><a href="{{ onedrive }}" target="_blank" style="display:inline-block;padding:10px 24px;background:#0078d4;color:white;border-radius:8px;text-decoration:none;font-weight:600;">Open OneDrive Folder</a><br><a href="/chat" style="display:inline-block;margin-top:16px;color:#388bfd;font-size:13px;">← Back to Chat</a></div></div>', onedrive=get_admin_setting('onedrive_folder_link', '#')), 404
     return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
+
+
+# ─── USER ONLINE STATUS ──────────────────────────────────────────
+@app.route("/api/chat/heartbeat", methods=["POST"])
+@login_required
+def api_chat_heartbeat():
+    conn = get_db()
+    if conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET last_active = NOW() WHERE id = %s", (session["user_id"],))
+        conn.commit(); cursor.close(); conn.close()
+    return jsonify({"ok": True})
+
+@app.route("/api/chat/online-status")
+@login_required
+def api_chat_online_status():
+    conn = get_db(); cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, full_name, last_active FROM users WHERE is_approved = 1 AND is_active = 1")
+    users = cursor.fetchall(); cursor.close(); conn.close()
+    result = []
+    from datetime import datetime
+    now = datetime.now()
+    for u in users:
+        is_online = False
+        if u.get("last_active"):
+            diff = (now - u["last_active"]).total_seconds()
+            is_online = diff < 120  # online if active within 2 minutes
+        result.append({"id": u["id"], "name": u["full_name"], "is_online": is_online,
+                       "last_active": u["last_active"].strftime("%Y-%m-%d %H:%M:%S") if u.get("last_active") else None})
+    return jsonify(result)
 
 
 # ═══════════════════════════════════════════════════════════════════════
