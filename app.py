@@ -97,7 +97,7 @@ AVAILABLE_TOOLS = {
 # ═══════════════════════════════════════════════════════════════════════
 
 def get_db():
-    """Get a database connection."""
+    """Get a database connection with IST timezone."""
     try:
         conn = mysql.connector.connect(
             host=DB_CONFIG["host"],
@@ -106,6 +106,10 @@ def get_db():
             password=DB_CONFIG["password"],
             database=DB_CONFIG["database"],
         )
+        # Set session timezone to IST so NOW() and CURRENT_TIMESTAMP return local time
+        cursor = conn.cursor()
+        cursor.execute("SET time_zone = '+05:30'")
+        cursor.close()
         return conn
     except mysql.connector.Error as e:
         print(f"Database connection error: {e}")
@@ -124,6 +128,7 @@ def init_db():
         cursor = conn.cursor()
         cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{DB_CONFIG['database']}`")
         cursor.execute(f"USE `{DB_CONFIG['database']}`")
+        cursor.execute("SET time_zone = '+05:30'")
 
         # Users table
         cursor.execute("""
@@ -137,10 +142,21 @@ def init_db():
                 is_active TINYINT(1) DEFAULT 1,
                 mail_enabled TINYINT(1) DEFAULT 1,
                 allowed_tools JSON DEFAULT NULL,
+                last_active DATETIME DEFAULT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         """)
+
+        # Add columns for existing databases that were created before this update
+        for alter_sql in [
+            "ALTER TABLE users ADD COLUMN last_active DATETIME DEFAULT NULL",
+            "ALTER TABLE chat_messages ADD COLUMN reply_to_id INT DEFAULT NULL",
+        ]:
+            try:
+                cursor.execute(alter_sql)
+            except mysql.connector.Error:
+                pass  # Column already exists
 
         # OTP table
         cursor.execute("""
@@ -293,11 +309,6 @@ def init_db():
             )
         """)
 
-        # Add reply_to_id column if not exists
-        try:
-            cursor.execute("ALTER TABLE chat_messages ADD COLUMN reply_to_id INT DEFAULT NULL")
-        except Exception:
-            pass
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_read_receipts (
                 id INT AUTO_INCREMENT PRIMARY KEY,
