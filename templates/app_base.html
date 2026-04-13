@@ -3,6 +3,19 @@
 <button class="mobile-toggle"><i class="fa-solid fa-bars"></i></button>
 <div class="sidebar-overlay"></div>
 
+<!-- Theme Toggle (top-right) -->
+<div class="theme-toggle-wrap" id="themeToggle">
+    <button onclick="setTheme('light')" id="themeLight" title="Light">
+        <i class="fa-solid fa-sun"></i>
+    </button>
+    <button onclick="setTheme('system')" id="themeSystem" title="System">
+        <i class="fa-solid fa-desktop"></i>
+    </button>
+    <button onclick="setTheme('dark')" id="themeDark" title="Dark">
+        <i class="fa-solid fa-moon"></i>
+    </button>
+</div>
+
 <div class="app-wrapper">
     <!-- Sidebar -->
     <aside class="sidebar">
@@ -14,7 +27,6 @@
         </div>
 
         <nav class="sidebar-nav">
-            <!-- Dashboard always visible -->
             <a href="{{ url_for('dashboard') }}"
                class="{% if request.endpoint == 'dashboard' %}active{% endif %}">
                 <span class="nav-icon"><i class="fa-solid fa-gauge-high"></i></span>
@@ -26,7 +38,6 @@
             <div class="sidebar-section-label">Tools</div>
             {% endif %}
 
-            <!-- Dynamic tool links – only show tools assigned to this user -->
             {% for tool in user_tools %}
                 {% if tool.key == 'reminder' %}
                 <a href="{{ url_for('add_reminder') }}"
@@ -139,25 +150,48 @@
     </main>
 </div>
 
-<!-- Chat unread badge updater -->
+<!-- Theme Switcher -->
+<script>
+function setTheme(mode) {
+    localStorage.setItem('reydm-theme', mode);
+    applyTheme(mode);
+    updateThemeButtons(mode);
+}
+function applyTheme(mode) {
+    var isDark;
+    if (mode === 'dark') isDark = true;
+    else if (mode === 'light') isDark = false;
+    else isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+}
+function updateThemeButtons(mode) {
+    document.getElementById('themeLight').classList.toggle('active', mode === 'light');
+    document.getElementById('themeSystem').classList.toggle('active', mode === 'system');
+    document.getElementById('themeDark').classList.toggle('active', mode === 'dark');
+}
+(function() {
+    var saved = localStorage.getItem('reydm-theme') || 'system';
+    applyTheme(saved);
+    updateThemeButtons(saved);
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+        if ((localStorage.getItem('reydm-theme') || 'system') === 'system') applyTheme('system');
+    });
+})();
+</script>
+
+<!-- Chat unread badge -->
 <script>
 (function() {
-    const badge = document.getElementById('chatUnreadBadge');
+    var badge = document.getElementById('chatUnreadBadge');
     if (!badge) return;
-
     async function updateUnread() {
         try {
-            const res = await fetch('/api/chat/unread-total');
-            const data = await res.json();
-            if (data.unread > 0) {
-                badge.textContent = data.unread > 99 ? '99+' : data.unread;
-                badge.style.display = 'inline-block';
-            } else {
-                badge.style.display = 'none';
-            }
+            var res = await fetch('/api/chat/unread-total');
+            var data = await res.json();
+            if (data.unread > 0) { badge.textContent = data.unread > 99 ? '99+' : data.unread; badge.style.display = 'inline-block'; }
+            else { badge.style.display = 'none'; }
         } catch (e) {}
     }
-
     updateUnread();
     setInterval(updateUnread, 10000);
 })();
