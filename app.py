@@ -89,6 +89,21 @@ AVAILABLE_TOOLS = {
         "icon": "fa-solid fa-comments",
         "description": "Team chat with file sharing via OneDrive",
     },
+    "pettycash_cbe": {
+        "name": "Petty Cash (CBE)",
+        "icon": "fa-solid fa-money-bill-wave",
+        "description": "Coimbatore office petty cash tracker",
+    },
+    "pettycash_dgl": {
+        "name": "Petty Cash (DGL)",
+        "icon": "fa-solid fa-money-bills",
+        "description": "Dindigul office petty cash tracker",
+    },
+    "leavemanager": {
+        "name": "Leave Manager",
+        "icon": "fa-solid fa-calendar-check",
+        "description": "Employee leave tracker with monthly dashboard",
+    },
 }
 
 
@@ -2424,6 +2439,35 @@ def update_admin_settings():
     cursor.execute("INSERT INTO admin_settings (setting_key, setting_value) VALUES ('onedrive_folder_link', %s) ON DUPLICATE KEY UPDATE setting_value = %s", (onedrive_link, onedrive_link))
     conn.commit(); cursor.close(); conn.close()
     flash("Settings updated.", "success"); return redirect(url_for("admin_settings"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PETTY CASH
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/petty-cash/coimbatore")
+@login_required
+@tool_required("pettycash_cbe")
+def pettycash_cbe():
+    return render_template("petty_cash_coimbatore.html")
+
+
+@app.route("/petty-cash/dindigul")
+@login_required
+@tool_required("pettycash_dgl")
+def pettycash_dgl():
+    return render_template("petty_cash_dindigul.html")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# LEAVE MANAGER
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.route("/leave-manager")
+@login_required
+@tool_required("leavemanager")
+def leavemanager():
+    return render_template("RDM_Leave_Manager.html")
 
 
 # ═══════════════════════════════════════════════════════════════════════
