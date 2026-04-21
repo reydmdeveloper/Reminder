@@ -88,6 +88,24 @@
                     Chat
                     <span class="nav-badge" id="chatUnreadBadge" style="display:none;">0</span>
                 </a>
+                {% elif tool.key == 'pettycash_cbe' %}
+                <a href="{{ url_for('pettycash_cbe') }}"
+                   class="{% if request.endpoint == 'pettycash_cbe' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Petty Cash (CBE)
+                </a>
+                {% elif tool.key == 'pettycash_dgl' %}
+                <a href="{{ url_for('pettycash_dgl') }}"
+                   class="{% if request.endpoint == 'pettycash_dgl' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Petty Cash (DGL)
+                </a>
+                {% elif tool.key == 'leavemanager' %}
+                <a href="{{ url_for('leavemanager') }}"
+                   class="{% if request.endpoint == 'leavemanager' %}active{% endif %}">
+                    <span class="nav-icon"><i class="{{ tool.icon }}"></i></span>
+                    Leave Manager
+                </a>
                 {% endif %}
             {% endfor %}
 
